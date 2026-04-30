@@ -1,0 +1,10 @@
+# QuickFlorence MCP Server - Florence2 vision tools via Model Context Protocol
+# CPU-only mode (PyTorch CUDA build with CPU fallback)
+
+mcp[cli]>=1.2.0
+torch>=2.0.0
+transformers==4.53.0
+Pillow>=10.0.0
+accelerate
+timm
+einops
