@@ -2,6 +2,8 @@
 
 MCP Server for Florence-2 Large — a vision model for image understanding tasks including captioning, object detection, OCR, segmentation, and more.
 
+![QuickFlorence Demo](demo.png)
+
 ## Prerequisites: Install `uv`
 
 QuickFlorence uses [`uv`](https://docs.astral.sh/uv/getting-started/installation/) for fast package installation and execution via `uvx`.
