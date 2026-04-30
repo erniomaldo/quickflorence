@@ -96,4 +96,3 @@ def run_inference(image_path: str, task: str, text_input: Optional[str] = None) 
     )
 
     return parsed_answer
-

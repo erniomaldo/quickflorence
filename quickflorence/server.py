@@ -1,7 +1,14 @@
 """QuickFlorence MCP Server - Florence2 vision tools exposed via Model Context Protocol."""
 
 import sys
+import os
 from typing import Optional
+
+# Redirect HF cache to user-writable directory
+hf_cache = os.path.expanduser("~/.cache/huggingface")
+os.makedirs(hf_cache, exist_ok=True)
+os.environ["HF_HOME"] = hf_cache
+os.environ["HUGGINGFACE_HUB_CACHE"] = os.path.join(hf_cache, "hub")
 
 from mcp.server.fastmcp import FastMCP
 
