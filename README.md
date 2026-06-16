@@ -52,15 +52,44 @@ Add the following to your `opencode.jsonc` (or equivalent MCP config):
 
 ## Available MCP Tools
 
+All Florence-2 tools accept an optional `model` parameter (alias or HF ID) to switch models per-call without restarting the server. Models are cached in memory so switching is instant after first load.
+
 | Tool | Description | Parameters |
 |---|---|---|
-| `caption` | Generate a text caption describing an image | `image_path` (str), `detail_level` (str: `simple`, `detailed`, `more_detailed`) |
-| `detect_objects` | Detect objects with bounding boxes and labels | `image_path` (str) |
-| `dense_region_caption` | Generate captions for every region with bounding boxes | `image_path` (str) |
-| `phrase_grounding` | Find and localize a specific phrase within an image | `image_path` (str), `phrase` (str) |
-| `segment_by_expression` | Segment regions matching a referring expression | `image_path` (str), `expression` (str) |
-| `ocr` | Extract text from an image (OCR) | `image_path` (str), `with_regions` (bool, default: `false`) |
-| `analyze_image` | Generic Florence2 inference for any supported task | `image_path` (str), `task_mode` (str), `text_input` (str, optional) |
+| `list_florence_models` | List all available Florence-2 models with aliases | _(none)_ |
+| `caption` | Generate a text caption describing an image | `image_path`, `detail_level`, `model` (optional) |
+| `detect_objects` | Detect objects with bounding boxes and labels | `image_path`, `model` (optional) |
+| `dense_region_caption` | Generate captions for every region with bounding boxes | `image_path`, `model` (optional) |
+| `phrase_grounding` | Find and localize a specific phrase within an image | `image_path`, `phrase`, `model` (optional) |
+| `segment_by_expression` | Segment regions matching a referring expression | `image_path`, `expression`, `model` (optional) |
+| `ocr` | Extract text from an image (OCR) | `image_path`, `with_regions`, `model` (optional) |
+| `analyze_image` | Generic Florence2 inference for any supported task | `image_path`, `task_mode`, `text_input`, `model` (optional) |
+
+### Model Aliases
+
+Use these short aliases in the `model` parameter:
+
+| Alias | HuggingFace ID | RAM (est.) | Speed vs Large | Use Case |
+|-------|---------------|-----------|----------------|----------|
+| `florence2-base` | `microsoft/Florence-2-base` | ~600MB | ~3x faster | Quick inference, limited RAM |
+| `florence2-large` | `microsoft/Florence-2-large` | ~2GB | reference | Best quality (default) |
+| `florence2-base-ft` | `microsoft/Florence-2-base-ft` | ~600MB | ~3x faster | Fine-tuned base variant |
+| `florence2-large-ft` | `microsoft/Florence-2-large-ft` | ~2GB | reference | Fine-tuned large variant |
+
+You can also pass the full HuggingFace ID directly (e.g., `"microsoft/Florence-2-base"`).
+
+### Model Selection Strategies
+
+**Per-call (recommended for flexibility):** Pass `model="florence2-base"` to any tool call. Models are cached in memory, so switching between base and large is instant after first load.
+
+**Global default:** Set the `FLORENCE_MODEL` environment variable before starting the server:
+
+```bash
+export FLORENCE_MODEL="microsoft/Florence-2-base"
+uvx --from git+https://github.com/erniomaldo/quickflorence quickflorence
+```
+
+This sets the default model for all tool calls that don't specify `model` explicitly.
 
 ## Supported Task Modes
 
@@ -82,26 +111,8 @@ The `analyze_image` tool accepts any of these Florence-2 task modes:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FLORENCE_MODEL` | `microsoft/Florence-2-large` | HuggingFace model identifier. See supported models below. |
+| `FLORENCE_MODEL` | `florence2-large` | Default model alias or HF ID. Overridden by per-call `model` parameter. Accepts aliases (`florence2-base`) or full HF IDs (`microsoft/Florence-2-base`). |
 | `QUICKFLORENCE_DEVICE` | auto-detect | Device override: `cuda`, `cuda:N`, `rocm`, or `cpu`. |
-
-### Supported Models
-
-All Florence-2 variants share the same API and architecture — only the model size differs.
-
-| Model | RAM (est.) | Speed vs Large | Use Case |
-|-------|-----------|----------------|----------|
-| `microsoft/Florence-2-base` | ~600MB | ~3x faster | Quick inference, limited RAM |
-| `microsoft/Florence-2-large` | ~2GB | reference | Best quality (default) |
-| `microsoft/Florence-2-base-ft` | ~600MB | ~3x faster | Fine-tuned base variant |
-| `microsoft/Florence-2-large-ft` | ~2GB | reference | Fine-tuned large variant |
-
-Set the model before running:
-
-```bash
-export FLORENCE_MODEL="microsoft/Florence-2-base"
-uvx --from git+https://github.com/erniomaldo/quickflorence quickflorence
-```
 
 ## System Requirements
 

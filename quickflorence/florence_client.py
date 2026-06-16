@@ -7,37 +7,55 @@ from typing import Optional, Union
 # Force stderr logging for MCP stdio transport (stdout is reserved for JSON-RPC)
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
-# Module-level cache for lazy loading
-_model = None
-_processor = None
-_device = None
 
-# Supported Florence-2 model identifiers
-SUPPORTED_MODELS = frozenset({
-    "microsoft/Florence-2-base",
-    "microsoft/Florence-2-large",
-    "microsoft/Florence-2-base-ft",
-    "microsoft/Florence-2-large-ft",
-})
+# ─── Model Registry ──────────────────────────────────────────────
 
-# Configurable model via FLORENCE_MODEL env var (default: large)
-MODEL_NAME = os.environ.get("FLORENCE_MODEL", "microsoft/Florence-2-large")
+# Human-readable aliases → HuggingFace IDs. Default model selected via
+# FLORENCE_MODEL env var (accepts alias or HF ID), falling back to large.
+_MODELS: dict[str, str] = {
+    "florence2-base": "microsoft/Florence-2-base",
+    "florence2-large": "microsoft/Florence-2-large",
+    "florence2-base-ft": "microsoft/Florence-2-base-ft",
+    "florence2-large-ft": "microsoft/Florence-2-large-ft",
+}
+
+# Reverse lookup: HF ID → alias (for display)
+_HF_TO_ALIAS: dict[str, str] = {v: k for k, v in _MODELS.items()}
+
+_DEFAULT_MODEL_KEY = os.environ.get("FLORENCE_MODEL", "florence2-large")
 
 
-def _validate_model(model_name: str) -> str:
-    """Validate and return the effective Florence-2 model name.
+def list_models() -> list[dict]:
+    """Return metadata about all supported Florence-2 models."""
+    return [
+        {"alias": alias, "hf_id": hf_id} for alias, hf_id in _MODELS.items()
+    ]
 
-    Falls back to default if the requested model is not in the supported list.
+
+def _resolve_model_key(model_hint: str) -> str:
+    """Resolve a model hint (alias or HF ID) to a canonical alias key.
+
+    Falls back to the default if the hint is unrecognised.
     """
-    if model_name in SUPPORTED_MODELS:
-        return model_name
+    # Direct alias match
+    if model_hint in _MODELS:
+        return model_hint
+    # HF ID → alias
+    alias = _HF_TO_ALIAS.get(model_hint)
+    if alias:
+        return alias
     print(
-        f"[QuickFlorence] WARNING: Unknown model '{model_name}'. "
-        f"Supported models: {', '.join(sorted(SUPPORTED_MODELS))}. "
-        f"Falling back to default.",
+        f"[QuickFlorence] WARNING: Unknown model '{model_hint}'. "
+        f"Supported aliases: {', '.join(sorted(_MODELS))}. "
+        f"Falling back to default ('{_DEFAULT_MODEL_KEY}').",
         file=sys.stderr,
     )
-    return "microsoft/Florence-2-large"
+    return _DEFAULT_MODEL_KEY
+
+
+def _get_hf_id(model_key: str) -> str:
+    """Get the HuggingFace model ID for a canonical alias key."""
+    return _MODELS[model_key]
 
 
 def _resolve_device(device_hint: Optional[str] = None) -> str:
@@ -101,54 +119,76 @@ def _resolve_device(device_hint: Optional[str] = None) -> str:
     return "cpu"
 
 
-def _ensure_loaded(device_hint: Optional[str] = None):
-    """Lazily load Florence2 model and processor on first call.
+# Per-model cache: {model_key: (model, processor)}
+_model_cache: dict[str, tuple] = {}
+
+# Shared device (all models run on the same device)
+_device: Optional[object] = None
+
+
+def _ensure_loaded(
+    model_hint: Optional[str] = None,
+    device_hint: Optional[str] = None,
+):
+    """Lazily load a Florence2 model and processor by alias key.
+
+    Models are cached per-key so switching between base/large doesn't
+    require re-downloading — both stay in RAM/GPU memory.
 
     Args:
+        model_hint: Alias (e.g. 'florence2-base') or HF ID.  Falls back to
+                    FLORENCE_MODEL env var, then 'florence2-large'.
         device_hint: Optional device override (e.g., 'cuda', 'rocm', 'cpu').
                      If not provided, reads QUICKFLORENCE_DEVICE env var or auto-detects.
     """
-    global _model, _processor, _device
+    global _device
 
-    if _model is not None and _processor is not None:
-        return
+    model_key = _resolve_model_key(model_hint or _DEFAULT_MODEL_KEY)
 
-    # Resolve device from hint > env var > auto-detect
-    effective_hint = device_hint or os.environ.get("QUICKFLORENCE_DEVICE")
-    resolved_device = _resolve_device(effective_hint)
+    # Already cached? Return immediately.
+    if model_key in _model_cache:
+        return _model_cache[model_key]
 
-    # Validate and resolve model name
-    effective_model = _validate_model(MODEL_NAME)
-    print(f"Loading {effective_model}...", file=sys.stderr)
+    # Resolve device once (shared across all models)
+    if _device is None:
+        effective_hint = device_hint or os.environ.get("QUICKFLORENCE_DEVICE")
+        resolved_device = _resolve_device(effective_hint)
+        import torch
+        _device = torch.device(resolved_device)
 
-    global _torch
+    hf_id = _get_hf_id(model_key)
+    print(f"Loading {model_key} ({hf_id}) on {_device}...", file=sys.stderr)
+
     import torch
-
     from transformers import AutoProcessor, AutoModelForCausalLM
-    from PIL import Image
-
-    _device = torch.device(resolved_device)
-    print(f"Using device: {_device}", file=sys.stderr)
 
     # Use half-precision on GPU for memory efficiency
-    dtype = torch.float16 if "cuda" in resolved_device or resolved_device == "rocm" else torch.float32
-    print(f"Using dtype: {dtype}", file=sys.stderr)
+    dtype = (
+        torch.float16 if "cuda" in str(_device) else torch.float32
+    )
 
-    _model = AutoModelForCausalLM.from_pretrained(
-        effective_model,
+    model = AutoModelForCausalLM.from_pretrained(
+        hf_id,
         trust_remote_code=True,
         torch_dtype=dtype,
     ).to(_device)
 
-    _processor = AutoProcessor.from_pretrained(
-        effective_model,
+    processor = AutoProcessor.from_pretrained(
+        hf_id,
         trust_remote_code=True,
     )
 
-    print("Model loaded successfully.", file=sys.stderr)
+    _model_cache[model_key] = (model, processor)
+    print(f"{model_key} loaded successfully.", file=sys.stderr)
+    return model, processor
 
 
-def run_inference(image_path: str, task: str, text_input: Optional[str] = None) -> dict:
+def run_inference(
+    image_path: str,
+    task: str,
+    text_input: Optional[str] = None,
+    model: Optional[str] = None,
+) -> dict:
     """
     Run Florence2 inference on an image.
 
@@ -156,11 +196,13 @@ def run_inference(image_path: str, task: str, text_input: Optional[str] = None) 
         image_path: Path to the image file.
         task: Task prompt (e.g., "<CAPTION>", "<OD>").
         text_input: Optional text input for tasks that support it.
+        model: Model alias key (e.g. 'florence2-base') or HF ID.  Falls back
+               to FLORENCE_MODEL env var, then 'florence2-large'.
 
     Returns:
         Dictionary with parsed results from Florence2.
     """
-    _ensure_loaded()
+    model_obj, processor = _ensure_loaded(model_hint=model)
 
     from PIL import Image
 
@@ -173,14 +215,14 @@ def run_inference(image_path: str, task: str, text_input: Optional[str] = None) 
     prompt = task + text_input if text_input else task
 
     # Prepare inputs
-    inputs = _processor(
+    inputs = processor(
         text=prompt,
         images=image,
         return_tensors="pt",
     ).to(_device)
 
     # Generate
-    generated_ids = _model.generate(
+    generated_ids = model_obj.generate(
         input_ids=inputs["input_ids"],
         pixel_values=inputs["pixel_values"],
         max_new_tokens=1024,
@@ -190,10 +232,10 @@ def run_inference(image_path: str, task: str, text_input: Optional[str] = None) 
     )
 
     # Decode
-    generated_text = _processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
 
     # Post-process
-    parsed_answer = _processor.post_process_generation(
+    parsed_answer = processor.post_process_generation(
         generated_text,
         task=task,
         image_size=(image.width, image.height),
