@@ -78,6 +78,31 @@ The `analyze_image` tool accepts any of these Florence-2 task modes:
 | `<OCR>` | Extract text without coordinates |
 | `<OCR_WITH_REGION>` | Extract text with bounding box coordinates |
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FLORENCE_MODEL` | `microsoft/Florence-2-large` | HuggingFace model identifier. See supported models below. |
+| `QUICKFLORENCE_DEVICE` | auto-detect | Device override: `cuda`, `cuda:N`, `rocm`, or `cpu`. |
+
+### Supported Models
+
+All Florence-2 variants share the same API and architecture — only the model size differs.
+
+| Model | RAM (est.) | Speed vs Large | Use Case |
+|-------|-----------|----------------|----------|
+| `microsoft/Florence-2-base` | ~600MB | ~3x faster | Quick inference, limited RAM |
+| `microsoft/Florence-2-large` | ~2GB | reference | Best quality (default) |
+| `microsoft/Florence-2-base-ft` | ~600MB | ~3x faster | Fine-tuned base variant |
+| `microsoft/Florence-2-large-ft` | ~2GB | reference | Fine-tuned large variant |
+
+Set the model before running:
+
+```bash
+export FLORENCE_MODEL="microsoft/Florence-2-base"
+uvx --from git+https://github.com/erniomaldo/quickflorence quickflorence
+```
+
 ## System Requirements
 
 - **`uv`** (includes `uvx`) — Python package installer and runner. See [installation guide](https://docs.astral.sh/uv/getting-started/installation/)

@@ -12,15 +12,114 @@ _model = None
 _processor = None
 _device = None
 
+# Supported Florence-2 model identifiers
+SUPPORTED_MODELS = frozenset({
+    "microsoft/Florence-2-base",
+    "microsoft/Florence-2-large",
+    "microsoft/Florence-2-base-ft",
+    "microsoft/Florence-2-large-ft",
+})
 
-def _ensure_loaded():
-    """Lazily load Florence2 model and processor on first call."""
+# Configurable model via FLORENCE_MODEL env var (default: large)
+MODEL_NAME = os.environ.get("FLORENCE_MODEL", "microsoft/Florence-2-large")
+
+
+def _validate_model(model_name: str) -> str:
+    """Validate and return the effective Florence-2 model name.
+
+    Falls back to default if the requested model is not in the supported list.
+    """
+    if model_name in SUPPORTED_MODELS:
+        return model_name
+    print(
+        f"[QuickFlorence] WARNING: Unknown model '{model_name}'. "
+        f"Supported models: {', '.join(sorted(SUPPORTED_MODELS))}. "
+        f"Falling back to default.",
+        file=sys.stderr,
+    )
+    return "microsoft/Florence-2-large"
+
+
+def _resolve_device(device_hint: Optional[str] = None) -> str:
+    """Resolve the target device for model inference.
+
+    Priority order:
+    1. Explicit hint (QUICKFLORENCE_DEVICE env var or CLI --device)
+    2. Auto-detect: CUDA > ROCm > CPU
+
+    Supported values: 'cuda', 'cuda:N', 'rocm', 'cpu'
+    """
+    import torch
+
+    # Normalize the hint
+    if device_hint:
+        device_hint = device_hint.strip().lower()
+
+    # If explicit device requested, validate it
+    if device_hint in ("cuda", "cuda:0"):
+        if not torch.cuda.is_available():
+            print(
+                "[QuickFlorence] WARNING: CUDA requested but not available. "
+                "Falling back to auto-detect.",
+                file=sys.stderr,
+            )
+        else:
+            return device_hint if device_hint == "cuda" else "cuda:0"
+    elif device_hint and device_hint.startswith("cuda:"):
+        try:
+            idx = int(device_hint.split(":")[1])
+            if torch.cuda.is_available() and 0 <= idx < torch.cuda.device_count():
+                return device_hint
+            print(
+                f"[QuickFlorence] WARNING: CUDA:{idx} requested but not available "
+                f"(GPU count: {torch.cuda.device_count()}). Falling back to auto-detect.",
+                file=sys.stderr,
+            )
+        except (ValueError, IndexError):
+            print(
+                f"[QuickFlorence] WARNING: Invalid device '{device_hint}'. Falling back to auto-detect.",
+                file=sys.stderr,
+            )
+    elif device_hint == "rocm":
+        # ROCm is exposed via torch.cuda with HIP backend
+        if hasattr(torch.version, "hip") and torch.version.hip is not None:
+            return "cuda"  # PyTorch uses 'cuda' device string for ROCm too
+        print(
+            "[QuickFlorence] WARNING: ROCm requested but PyTorch was not built with HIP support. "
+            "Install ROCm PyTorch: pip install torch --index-url https://download.pytorch.org/whl/rocm6.x",
+            file=sys.stderr,
+        )
+    elif device_hint == "cpu":
+        return "cpu"
+
+    # Auto-detect: CUDA > ROCm > CPU
+    if torch.cuda.is_available():
+        backend = "ROCm (HIP)" if hasattr(torch.version, "hip") and torch.version.hip is not None else "CUDA"
+        print(f"[QuickFlorence] Auto-detected {backend} GPU available.", file=sys.stderr)
+        return "cuda"
+
+    return "cpu"
+
+
+def _ensure_loaded(device_hint: Optional[str] = None):
+    """Lazily load Florence2 model and processor on first call.
+
+    Args:
+        device_hint: Optional device override (e.g., 'cuda', 'rocm', 'cpu').
+                     If not provided, reads QUICKFLORENCE_DEVICE env var or auto-detects.
+    """
     global _model, _processor, _device
 
     if _model is not None and _processor is not None:
         return
 
-    print("Loading Florence-2-large model...", file=sys.stderr)
+    # Resolve device from hint > env var > auto-detect
+    effective_hint = device_hint or os.environ.get("QUICKFLORENCE_DEVICE")
+    resolved_device = _resolve_device(effective_hint)
+
+    # Validate and resolve model name
+    effective_model = _validate_model(MODEL_NAME)
+    print(f"Loading {effective_model}...", file=sys.stderr)
 
     global _torch
     import torch
@@ -28,16 +127,21 @@ def _ensure_loaded():
     from transformers import AutoProcessor, AutoModelForCausalLM
     from PIL import Image
 
-    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _device = torch.device(resolved_device)
     print(f"Using device: {_device}", file=sys.stderr)
 
+    # Use half-precision on GPU for memory efficiency
+    dtype = torch.float16 if "cuda" in resolved_device or resolved_device == "rocm" else torch.float32
+    print(f"Using dtype: {dtype}", file=sys.stderr)
+
     _model = AutoModelForCausalLM.from_pretrained(
-        "microsoft/Florence-2-large",
+        effective_model,
         trust_remote_code=True,
+        torch_dtype=dtype,
     ).to(_device)
 
     _processor = AutoProcessor.from_pretrained(
-        "microsoft/Florence-2-large",
+        effective_model,
         trust_remote_code=True,
     )
 
